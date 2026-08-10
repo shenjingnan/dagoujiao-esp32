@@ -73,3 +73,6 @@ Testing/
 managed_components/
 sdkconfig
 main/__pycache__/
+
+# 本地验证产物：参考渲染生成的 BGM WAV
+tools/bgm_ref.wav
