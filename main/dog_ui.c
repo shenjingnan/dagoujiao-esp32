@@ -11,6 +11,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "lvgl.h"
+#include "touch_async.h"
 
 #define DISPLAY_SIZE 360
 #define SETTINGS_SIZE 52
@@ -94,13 +95,20 @@ static void play_cell_at(lv_point_t point)
 {
     if (point.x >= DISPLAY_SIZE - SETTINGS_SIZE && point.y < SETTINGS_SIZE) return;
 
-    const uint8_t column = point.x >= 240 ? 2 : (point.x >= 120 ? 1 : 0);
-    dog_ui_schedule_bark(bark_audio_enqueue((bark_syllable_t)column));
-
-    /* 每次有效点击随机播放一种全屏动效；设置面板打开时不触发 */
+    /* 狗叫已由 touch_async 独立 task 按下即触发（音频不依赖 LVGL 渲染），
+     * 这里 LVGL 点击事件只负责全屏动效，避免重复触发。 */
     if (lv_obj_has_flag(s_settings_panel, LV_OBJ_FLAG_HIDDEN)) {
         fx_effects_spawn(point.x, point.y);
     }
+}
+
+/* 由 touch_async 独立触摸 task 调用（Core 0）：按下即触发狗叫，
+ * 不经过 LVGL 渲染任务，音频响应快、连点更跟手。 */
+void dog_ui_handle_touch(int32_t x, int32_t y)
+{
+    if (x >= DISPLAY_SIZE - SETTINGS_SIZE && y < SETTINGS_SIZE) return;
+    const uint8_t column = x >= 240 ? 2 : (x >= 120 ? 1 : 0);
+    dog_ui_schedule_bark(bark_audio_enqueue((bark_syllable_t)column));
 }
 
 static void stage_event(lv_event_t *event)
@@ -157,6 +165,8 @@ void dog_ui_init(void)
     bsp_display_start_with_config(&dcfg);
     bsp_display_backlight_on();
     bsp_display_lock(-1);
+    /* 触摸读取解耦：移出 LVGL 渲染任务，提升点击灵敏度（须在显示锁内） */
+    touch_async_init();
     lv_obj_t *stage = lv_screen_active();
     lv_obj_set_style_bg_color(stage, lv_color_hex(0xf7f1df), 0);
     lv_obj_set_style_bg_opa(stage, LV_OPA_COVER, 0);

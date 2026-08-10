@@ -34,9 +34,9 @@ if(NOT DOG_IMAGE_RESULT EQUAL 0)
 endif()
 
 idf_component_register(
-    SRCS "bgm.c" "app_main.c" "bark_audio.c" "dog_ui.c" "fx_effects.c"
+    SRCS "bgm.c" "app_main.c" "bark_audio.c" "dog_ui.c" "fx_effects.c" "touch_async.c"
          "${GENERATED_ASSET_DIR}/bark_samples.c"
          "${GENERATED_ASSET_DIR}/dog_images.c"
     INCLUDE_DIRS "." "${GENERATED_ASSET_DIR}"
-    REQUIRES waveshare__esp32_s3_touch_lcd_1_85B esp_codec_dev espressif__button nvs_flash esp_timer esp_hw_support freertos lvgl
+    REQUIRES waveshare__esp32_s3_touch_lcd_1_85B esp_codec_dev espressif__button espressif__esp_lcd_touch nvs_flash esp_timer esp_hw_support freertos lvgl
 )
