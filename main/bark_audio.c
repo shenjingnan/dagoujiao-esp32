@@ -136,7 +136,9 @@ void bark_audio_init(void)
     /* 音量独立：codec 输出固定满量程，VOL 只做数字域狗叫增益；BGM 由固定增益控制 */
     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(s_speaker, 100));
     bgm_init();
-    xTaskCreatePinnedToCore(audio_task, "bark_audio", 4096, NULL, 5, NULL, 0);
+    /* 优先级 9 高于 LVGL task(6)：实时音频必须按时补充 I2S 缓冲，
+     * 不能被 FX 全屏动画渲染抢占导致 underrun 卡顿。 */
+    xTaskCreatePinnedToCore(audio_task, "bark_audio", 4096, NULL, 9, NULL, 0);
     ESP_LOGI(TAG, "audio engine ready at %d Hz", SAMPLE_RATE);
 }
 

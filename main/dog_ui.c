@@ -1,18 +1,30 @@
 #include "dog_ui.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <string.h>
 
 #include "bark_audio.h"
 #include "bsp/esp-bsp.h"
 #include "dog_images.h"
+#include "fx_effects.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "lvgl.h"
+#include "touch_async.h"
 
 #define DISPLAY_SIZE 360
 #define SETTINGS_SIZE 52
 #define DOG_PIXELS (360 * 360 * 4) /* ARGB8888 360x360 */
+
+/* 大狗节拍律动（复刻网页版 main.js：BPM128 拍头跳起 + 压扁拉伸 + 两拍一周期旋转晃动） */
+#define DOG_BASE_SCALE 205      /* 256=100%，缩到 80% 让四周透出动效 */
+#define DOG_SPB_S      0.46875f /* 秒/拍 = 60/128（BPM128） */
+#define DOG_JUMP_PX    9.0f     /* 拍头向上跳 px */
+#define DOG_SWAY_PX    5.0f     /* 左右晃 px */
+#define DOG_SWAY_DEG   2.4f     /* 旋转角 ° */
+#define DOG_SQUASH_X   0.06f    /* 拍头 x 放大比例（压扁拉伸） */
+#define DOG_SQUASH_Y   0.05f    /* 拍头 y 压缩比例 */
 
 static lv_obj_t *s_dog;
 static lv_obj_t *s_status;
@@ -51,7 +63,7 @@ static void set_open(bool open)
     if (s_open == open) return;
     s_open = open;
     lv_image_set_src(s_dog, open ? &s_dog_open : &s_dog_closed);
-    lv_obj_set_y(s_dog, open ? -4 : 0);
+    /* y 位移统一由 animation_timer 的节拍律动计算（张嘴时额外跳起 -4px） */
 }
 
 static void update_status(void)
@@ -83,7 +95,19 @@ static void play_cell_at(lv_point_t point)
 {
     if (point.x >= DISPLAY_SIZE - SETTINGS_SIZE && point.y < SETTINGS_SIZE) return;
 
-    const uint8_t column = point.x >= 240 ? 2 : (point.x >= 120 ? 1 : 0);
+    /* 狗叫已由 touch_async 独立 task 按下即触发（音频不依赖 LVGL 渲染），
+     * 这里 LVGL 点击事件只负责全屏动效，避免重复触发。 */
+    if (lv_obj_has_flag(s_settings_panel, LV_OBJ_FLAG_HIDDEN)) {
+        fx_effects_spawn(point.x, point.y);
+    }
+}
+
+/* 由 touch_async 独立触摸 task 调用（Core 0）：按下即触发狗叫，
+ * 不经过 LVGL 渲染任务，音频响应快、连点更跟手。 */
+void dog_ui_handle_touch(int32_t x, int32_t y)
+{
+    if (x >= DISPLAY_SIZE - SETTINGS_SIZE && y < SETTINGS_SIZE) return;
+    const uint8_t column = x >= 240 ? 2 : (x >= 120 ? 1 : 0);
     dog_ui_schedule_bark(bark_audio_enqueue((bark_syllable_t)column));
 }
 
@@ -110,6 +134,17 @@ static void animation_timer(lv_timer_t *timer)
         set_open(false);
         s_close_at_us = 0;
     }
+
+    /* 大狗节拍律动（复刻网页版 main.js）：拍头向上跳 + 压扁拉伸 + 两拍一周期旋转晃动 */
+    const float t = (float)(now % 2000000) * 1e-6f; /* 限制在 2s 内保证 float 精度 */
+    const float phase = fmodf(t, DOG_SPB_S) / DOG_SPB_S;
+    const float beat_p = powf(1.0f - phase, 2.4f);
+    const float sway = sinf(t * (float)M_PI / DOG_SPB_S);
+    lv_obj_set_x(s_dog, (lv_coord_t)(sway * DOG_SWAY_PX));
+    lv_obj_set_y(s_dog, (lv_coord_t)(-DOG_JUMP_PX * beat_p) + (s_open ? -4 : 0));
+    lv_image_set_rotation(s_dog, (int32_t)(sway * DOG_SWAY_DEG * 10.0f));
+    lv_image_set_scale_x(s_dog, (uint32_t)(DOG_BASE_SCALE * (1.0f + DOG_SQUASH_X * beat_p)));
+    lv_image_set_scale_y(s_dog, (uint32_t)(DOG_BASE_SCALE * (1.0f - DOG_SQUASH_Y * beat_p)));
 }
 
 void dog_ui_schedule_bark(int64_t when_us) { s_bark_at_us = when_us; }
@@ -118,17 +153,31 @@ void dog_ui_init(void)
 {
     load_dog_art();
 
-    bsp_display_start();
+    bsp_display_cfg_t dcfg = {
+        .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
+        .rotation = ESP_LV_ADAPTER_ROTATE_0,
+        .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE,
+        .touch_flags = {0},
+    };
+    /* LVGL 渲染固定 Core 1；音频任务（bark_audio）固定 Core 0，
+     * 分核运行避免 FX 全屏动画渲染抢占实时音频导致卡顿。 */
+    dcfg.lv_adapter_cfg.task_core_id = 1;
+    bsp_display_start_with_config(&dcfg);
     bsp_display_backlight_on();
     bsp_display_lock(-1);
+    /* 触摸读取解耦：移出 LVGL 渲染任务，提升点击灵敏度（须在显示锁内） */
+    touch_async_init();
     lv_obj_t *stage = lv_screen_active();
     lv_obj_set_style_bg_color(stage, lv_color_hex(0xf7f1df), 0);
     lv_obj_set_style_bg_opa(stage, LV_OPA_COVER, 0);
     lv_obj_add_event_cb(stage, stage_event, LV_EVENT_CLICKED, NULL);
 
+    /* 全屏动效层：叠在背景之上、大狗之下（大狗在前不被遮挡），不可点击 */
+    fx_effects_init();
+
     s_dog = lv_image_create(stage);
     lv_image_set_src(s_dog, &s_dog_closed);
-    lv_image_set_scale(s_dog, 256); // art is already 360 px, no scaling needed
+    lv_image_set_scale(s_dog, DOG_BASE_SCALE);
     lv_image_set_pivot(s_dog, 180, 180);
     lv_obj_center(s_dog);
     lv_obj_remove_flag(s_dog, LV_OBJ_FLAG_CLICKABLE);
