@@ -15,3 +15,6 @@ void bark_audio_set_volume(uint8_t percent);
 uint8_t bark_audio_get_volume(void);
 void bark_audio_toggle_mute(void);
 bool bark_audio_is_muted(void);
+/* BGM 音量（本次 UI 未接线，仅留接口）：percent 0-100，作用于 BGM_DEFAULT_GAIN 之上 */
+void bark_audio_set_bgm_volume(uint8_t percent);
+uint8_t bark_audio_get_bgm_volume(void);

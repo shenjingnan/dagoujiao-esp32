@@ -3,6 +3,7 @@
 #include <limits.h>
 
 #include "bark_samples.h"
+#include "bgm.h"
 #include "bsp/esp-bsp.h"
 #include "driver/i2s_std.h"
 #include "esp_check.h"
@@ -34,7 +35,10 @@ static QueueHandle_t s_event_queue;
 static esp_codec_dev_handle_t s_speaker;
 static bark_voice_t s_voices[MAX_VOICES];
 static uint8_t s_volume = 80;
+static uint8_t s_bgm_percent = 100;
 static bool s_muted;
+static volatile bool s_bgm_armed;  /* 跨核：enqueue 写，audio_task 读清除 */
+static bool s_bgm_started;         /* 首次点按惰性启动判据 */
 
 static const bark_sample_t *sample_for(bark_syllable_t syllable)
 {
@@ -82,6 +86,12 @@ static void drain_events(void)
     while (xQueueReceive(s_event_queue, &event, 0) == pdTRUE) {
         start_voice(&event);
     }
+    /* 首次点按后惰性启动 BGM；bgm_start() 只在 audio_task（Core 0）上下文执行，
+     * 避免与渲染线程竞争音色池。首次点按的狗叫与 BGM step 0 落在同一批 drain 里。 */
+    if (s_bgm_armed) {
+        s_bgm_armed = false;
+        bgm_start();
+    }
 }
 
 static void audio_task(void *arg)
@@ -92,9 +102,11 @@ static void audio_task(void *arg)
     while (true) {
         drain_events();
         for (size_t frame = 0; frame < MIX_FRAMES; ++frame) {
-            int32_t mixed = 0;
-            for (size_t voice = 0; voice < MAX_VOICES; ++voice) mixed += render_voice(&s_voices[voice]);
-            mixed = (mixed * s_volume) / 100;
+            int32_t bark = 0;
+            for (size_t voice = 0; voice < MAX_VOICES; ++voice) bark += render_voice(&s_voices[voice]);
+            bark = (bark * s_volume) / 100;                    /* 狗叫跟随 VOL */
+            int32_t bgm = bgm_render_sample(s_muted);          /* BGM 内部已乘固定增益，不乘 s_volume */
+            int32_t mixed = bark + bgm;
             buffer[frame] = mixed > INT16_MAX ? INT16_MAX : (mixed < INT16_MIN ? INT16_MIN : (int16_t)mixed);
         }
         ESP_ERROR_CHECK(esp_codec_dev_write(s_speaker, buffer, MIX_FRAMES * sizeof(int16_t)));
@@ -121,7 +133,9 @@ void bark_audio_init(void)
     ESP_ERROR_CHECK(s_speaker == NULL ? ESP_FAIL : ESP_OK);
     esp_codec_dev_sample_info_t format = {.bits_per_sample = 16, .channel = 1, .sample_rate = SAMPLE_RATE};
     ESP_ERROR_CHECK(esp_codec_dev_open(s_speaker, &format));
-    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(s_speaker, s_volume));
+    /* 音量独立：codec 输出固定满量程，VOL 只做数字域狗叫增益；BGM 由固定增益控制 */
+    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(s_speaker, 100));
+    bgm_init();
     xTaskCreatePinnedToCore(audio_task, "bark_audio", 4096, NULL, 5, NULL, 0);
     ESP_LOGI(TAG, "audio engine ready at %d Hz", SAMPLE_RATE);
 }
@@ -129,12 +143,23 @@ void bark_audio_init(void)
 int64_t bark_audio_enqueue(bark_syllable_t syllable)
 {
     const int64_t now = esp_timer_get_time();
+    /* 首次点按：登记惰性启动 BGM（真正的 bgm_start() 由 audio_task 消费标志后执行） */
+    if (!s_bgm_started) {
+        s_bgm_started = true;
+        s_bgm_armed = true;
+    }
     const bark_event_t event = {.syllable = syllable};
     if (xQueueSend(s_event_queue, &event, 0) != pdTRUE) ESP_LOGW(TAG, "input queue full; dropping bark");
     return now;
 }
 
-void bark_audio_set_volume(uint8_t percent) { s_volume = percent > 100 ? 100 : percent; esp_codec_dev_set_out_vol(s_speaker, s_volume); }
+void bark_audio_set_volume(uint8_t percent) { s_volume = percent > 100 ? 100 : percent; }
 uint8_t bark_audio_get_volume(void) { return s_volume; }
 void bark_audio_toggle_mute(void) { s_muted = !s_muted; }
 bool bark_audio_is_muted(void) { return s_muted; }
+void bark_audio_set_bgm_volume(uint8_t percent)
+{
+    s_bgm_percent = percent > 100 ? 100 : percent;
+    bgm_set_gain(BGM_DEFAULT_GAIN * (float)s_bgm_percent / 100.0f);
+}
+uint8_t bark_audio_get_bgm_volume(void) { return s_bgm_percent; }
