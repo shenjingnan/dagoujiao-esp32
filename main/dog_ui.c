@@ -1,19 +1,18 @@
 #include "dog_ui.h"
 
 #include <stdbool.h>
+#include <string.h>
 
 #include "bark_audio.h"
 #include "bsp/esp-bsp.h"
+#include "dog_images.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 
 #define DISPLAY_SIZE 360
 #define SETTINGS_SIZE 52
-
-extern const uint8_t dagou_close_mouth_png_start[] asm("_binary_dagou_close_mouth_png_start");
-extern const uint8_t dagou_close_mouth_png_end[] asm("_binary_dagou_close_mouth_png_end");
-extern const uint8_t dagou_open_mouth_png_start[] asm("_binary_dagou_open_mouth_png_start");
-extern const uint8_t dagou_open_mouth_png_end[] asm("_binary_dagou_open_mouth_png_end");
+#define DOG_PIXELS (360 * 360 * 4) /* ARGB8888 360x360 */
 
 static lv_obj_t *s_dog;
 static lv_obj_t *s_status;
@@ -24,6 +23,28 @@ static bool s_open;
 
 static lv_image_dsc_t s_dog_closed;
 static lv_image_dsc_t s_dog_open;
+static void *s_dog_closed_data;
+static void *s_dog_open_data;
+
+static void load_dog_art(void)
+{
+    /* 优先把图片像素拷贝到 PSRAM，渲染时避免从 flash 反复读取；
+       分配失败则回退到 flash 中的原始数据（仍可显示）。 */
+    s_dog_closed = dog_close;
+    s_dog_open = dog_open;
+
+    s_dog_closed_data = heap_caps_malloc(DOG_PIXELS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_dog_closed_data != NULL) {
+        memcpy(s_dog_closed_data, dog_close.data, DOG_PIXELS);
+        s_dog_closed.data = s_dog_closed_data;
+    }
+
+    s_dog_open_data = heap_caps_malloc(DOG_PIXELS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_dog_open_data != NULL) {
+        memcpy(s_dog_open_data, dog_open.data, DOG_PIXELS);
+        s_dog_open.data = s_dog_open_data;
+    }
+}
 
 static void set_open(bool open)
 {
@@ -95,16 +116,7 @@ void dog_ui_schedule_bark(int64_t when_us) { s_bark_at_us = when_us; }
 
 void dog_ui_init(void)
 {
-    s_dog_closed.header = (lv_image_header_t){
-        .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RAW_ALPHA, .w = 0, .h = 0, .stride = 0,
-    };
-    s_dog_closed.data_size = (uint32_t)(dagou_close_mouth_png_end - dagou_close_mouth_png_start);
-    s_dog_closed.data = dagou_close_mouth_png_start;
-    s_dog_open.header = (lv_image_header_t){
-        .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_RAW_ALPHA, .w = 0, .h = 0, .stride = 0,
-    };
-    s_dog_open.data_size = (uint32_t)(dagou_open_mouth_png_end - dagou_open_mouth_png_start);
-    s_dog_open.data = dagou_open_mouth_png_start;
+    load_dog_art();
 
     bsp_display_start();
     bsp_display_backlight_on();
@@ -116,8 +128,8 @@ void dog_ui_init(void)
 
     s_dog = lv_image_create(stage);
     lv_image_set_src(s_dog, &s_dog_closed);
-    lv_image_set_scale(s_dog, 90); // source art is 1024 px; 90/256 fits 360 px
-    lv_image_set_pivot(s_dog, 512, 512);
+    lv_image_set_scale(s_dog, 256); // art is already 360 px, no scaling needed
+    lv_image_set_pivot(s_dog, 180, 180);
     lv_obj_center(s_dog);
     lv_obj_remove_flag(s_dog, LV_OBJ_FLAG_CLICKABLE);
 
