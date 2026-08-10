@@ -14,18 +14,18 @@
 
 /* ---------------- 画布 / 时序常量 ---------------- */
 
-#define FX_CANVAS_W 360
-#define FX_CANVAS_H 360
-#define FX_CX       180.0f /* 特效原点（屏幕中心） */
-#define FX_CY       180.0f
-#define FX_MIN_D    360.0f /* 屏幕短边 */
-#define FX_MAX_D    509.1169f /* hypot(360,360)，confetti 最大散布参考 */
+#define FX_CANVAS_W 240
+#define FX_CANVAS_H 240
+#define FX_CX       120.0f /* 特效原点（画布中心，居中显示） */
+#define FX_CY       120.0f
+#define FX_MIN_D    240.0f /* 屏幕短边 */
+#define FX_MAX_D    339.4113f /* hypot(240,240)，confetti 最大散布参考 */
 #define FX_IN_S     0.55f  /* 入场 0.55s */
 #define FX_OUT_S    0.40f  /* 退场 0.4s */
 #define FX_AUTO_LIFE_S 1.6f /* 不点击时自动消失：入场+短暂常驻后转退场渐隐 */
 #define FX_POOL     2      /* 当前特效 + 正在淡出的旧特效 */
 #define FX_MAX_SHAPES 40
-#define FX_UPDATE_MS 33    /* ~30fps，与 LVGL 默认刷新周期一致 */
+#define FX_UPDATE_MS 16    /* ~60fps，与 LVGL 刷新周期对齐 */
 #define FX_PI       3.14159265358979323846f
 
 /* ---------------- 调色板（与网页版 1:1） ---------------- */

@@ -12,10 +12,11 @@
 
 #define TAG "touch_async"
 
-#define TOUCH_POLL_MS 10        /* 触摸读取 task 轮询周期 */
+#define TOUCH_POLL_MS 5         /* 触摸读取 task 轮询周期 */
 #define TOUCH_READ_PERIOD_MS 16 /* LVGL indev 读取共享缓存的周期 */
 #define TOUCH_INT_GPIO BSP_LCD_TOUCH_INT /* CST816S INT 引脚，低电平=有触摸 */
-#define TOUCH_TRIGGER_GAP_US 200000 /* 抬起丢失时的兜底触发间隔（正常靠按下边沿） */
+#define TOUCH_MOVE_PX     10      /* 位置变化阈值：>10px 视为移动（滑动时持续触发叫） */
+#define TOUCH_MOVE_GAP_US 20000   /* 位置变化触发的最小间隔，防同区域连点抖动误触 */
 
 /* 共享缓存：touch task（Core 0）写，LVGL read_cb（Core 1）读。
  * lv_coord_t / lv_indev_state_t 对齐读写，在 Xtensa 上是原子的。 */
@@ -24,9 +25,10 @@ static volatile lv_coord_t s_touch_y;
 static volatile lv_indev_state_t s_touch_state = LV_INDEV_STATE_RELEASED;
 
 static esp_lcd_touch_handle_t s_tp;
-static bool s_touch_down; /* 正在触摸：保持 PRESSED 直到确认松开 */
-static bool s_prev_pressed; /* 上一轮是否按下（按下边沿判定） */
-static int64_t s_last_trigger_us; /* 上次触发狗叫的时刻（抬起丢失兜底） */
+static bool s_touch_down; /* 当前是否有触摸（按下边沿 = 无→有） */
+static int64_t s_last_trigger_us; /* 上次触发时刻（滑动触发最小间隔用） */
+static lv_coord_t s_last_x;      /* 上次触发时的坐标（滑动用位置变化识别） */
+static lv_coord_t s_last_y;
 
 /* 独立触摸读取：轮询读 CST816S（I2C，~0.5ms），写共享缓存。
  * 与 LVGL 渲染解耦，触摸状态不依赖 LVGL 的 33ms 调度。
@@ -50,27 +52,36 @@ static void touch_task(void *arg)
         if (err != ESP_OK) {
             s_touch_down = false; /* 芯片睡眠 = 无触摸 */
             s_touch_state = LV_INDEV_STATE_RELEASED;
+            ESP_LOGI(TAG, "touch UP(err)"); /* TEMP 诊断：确认抬起是否被检测到 */
             continue;
         }
         esp_lcd_touch_point_data_t pt[1];
         uint8_t n = 0;
         if (esp_lcd_touch_get_data(s_tp, pt, &n, 1) == ESP_OK && n > 0) {
-            /* 按下边沿触发（上一轮非按下）；持续按住不重复；
-             * 兜底：极快连点导致抬起被漏检时，间隔超阈值也触发。 */
+            /* 每次"按下"忠实触发一声：按下边沿（无触摸→有触摸）触发；
+             * 一次按下内原地不动不重复；手指不抬起滑动（位置变化>阈值且≥20ms）持续触发。
+             * 不再用时间兜底，避免一次按下原地重复发声。 */
             const int64_t now = esp_timer_get_time();
-            if (!s_prev_pressed || (now - s_last_trigger_us >= TOUCH_TRIGGER_GAP_US)) {
+            const bool press_edge = !s_touch_down;
+            const int dx = pt[0].x - s_last_x, dy = pt[0].y - s_last_y;
+            const bool moved = (dx * dx + dy * dy) > (TOUCH_MOVE_PX * TOUCH_MOVE_PX)
+                               && (now - s_last_trigger_us >= TOUCH_MOVE_GAP_US);
+            if (press_edge || moved) {
                 dog_ui_handle_touch((int32_t)pt[0].x, (int32_t)pt[0].y);
+                /* TEMP 诊断日志：核对触发次数，确认每次按下仅一声、抬起是否可靠，定位连点丢音 */
+                ESP_LOGI(TAG, "bark trg %s x=%d y=%d", press_edge ? "PRESS" : "MOVE", pt[0].x, pt[0].y);
                 s_last_trigger_us = now;
+                s_last_x = pt[0].x;
+                s_last_y = pt[0].y;
             }
-            s_prev_pressed = true;
             s_touch_down = true;
             s_touch_x = (lv_coord_t)pt[0].x;
             s_touch_y = (lv_coord_t)pt[0].y;
             s_touch_state = LV_INDEV_STATE_PRESSED;
         } else {
-            s_prev_pressed = false;
             s_touch_down = false; /* 读到无点 = 松开 */
             s_touch_state = LV_INDEV_STATE_RELEASED;
+            ESP_LOGI(TAG, "touch UP"); /* TEMP 诊断：确认抬起事件是否被检测到 */
         }
     }
 }

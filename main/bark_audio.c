@@ -18,7 +18,7 @@
 
 #define SAMPLE_RATE 32000
 #define MIX_FRAMES 128
-#define MAX_VOICES 6
+#define MAX_VOICES 10
 #define STEP_Q16_1 (1U << 16)
 
 static const char *TAG = "bark_audio";
