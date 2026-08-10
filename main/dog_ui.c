@@ -108,7 +108,9 @@ void dog_ui_handle_touch(int32_t x, int32_t y)
 {
     if (x >= DISPLAY_SIZE - SETTINGS_SIZE && y < SETTINGS_SIZE) return;
     const uint8_t column = x >= 240 ? 2 : (x >= 120 ? 1 : 0);
-    dog_ui_schedule_bark(bark_audio_enqueue((bark_syllable_t)column));
+    /* 同一音节按 Y 分 4 档音高：上高下低，匹配 bark_audio 的 BARK_PITCH_TIERS */
+    const uint8_t tier = y >= 270 ? 3 : (y >= 180 ? 2 : (y >= 90 ? 1 : 0));
+    dog_ui_schedule_bark(bark_audio_enqueue((bark_syllable_t)column, tier));
 }
 
 static void stage_event(lv_event_t *event)
