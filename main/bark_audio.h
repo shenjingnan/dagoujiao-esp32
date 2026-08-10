@@ -9,8 +9,11 @@ typedef enum {
     BARK_SYLLABLE_JIAO,
 } bark_syllable_t;
 
+/* 每音节可选的音高档数（0 最高音，匹配网页 BARK_TARGET_MIDI 下标顺序） */
+#define BARK_PITCH_TIERS 4
+
 void bark_audio_init(void);
-int64_t bark_audio_enqueue(bark_syllable_t syllable);
+int64_t bark_audio_enqueue(bark_syllable_t syllable, uint8_t tier);
 void bark_audio_set_volume(uint8_t percent);
 uint8_t bark_audio_get_volume(void);
 void bark_audio_toggle_mute(void);
